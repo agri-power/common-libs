@@ -1,0 +1,84 @@
+name: Publish Library to GitHub Packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  release:
+    types: [published]
+
+env:
+  JAVA_VERSION: '17'
+
+jobs:
+  publish:
+    name: Build & Publish Library
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+      
+      - name: Extract Version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing version: $VERSION"
+      
+      - name: Update Version (if tagged)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mvn versions:set -DnewVersion=${{ steps.version.outputs.version }}
+          mvn versions:commit
+      
+      - name: Run Tests
+        run: mvn clean test
+      
+      - name: Build Package
+        run: mvn package -DskipTests
+      
+      - name: Publish to GitHub Packages
+        run: mvn deploy -DskipTests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create Release Notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cat > release-notes.md << EOF
+          ## Common Libraries v${{ steps.version.outputs.version }}
+          
+          ### Maven Dependency
+          
+          \`\`\`xml
+          <dependency>
+            <groupId>com.agropower</groupId>
+            <artifactId>common-libs</artifactId>
+            <version>${{ steps.version.outputs.version }}</version>
+          </dependency>
+          \`\`\`
+          
+          ### Changes
+          - See commit history for detailed changes
+          EOF
+      
+      - name: Upload Release Notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 30
